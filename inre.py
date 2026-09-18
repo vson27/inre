@@ -1371,3 +1371,436 @@ for query in queries:
 
         print("Corresponding document IDs:", doc_ids)
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+import re
+from bisect import bisect_left
+import math
+
+
+# ============================================================
+# DOCUMENT COLLECTION
+# ============================================================
+
+documents = {
+    "D1": "computer computing computation complete running learning processing retrieving",
+    "D2": "compiler compter learning processing",
+    "D3": "computer networks retrieving documents",
+    "D4": "machine learning improves computer vision",
+    "D5": "document processing running applications"
+}
+
+
+# ============================================================
+# 1. BUILD INVERTED INDEX
+#    term -> list of document IDs
+# ============================================================
+
+inverted_index = {}
+
+for doc_id, text in documents.items():
+
+    # Tokenization + lowercase
+    terms = re.findall(r'\b[a-zA-Z]+\b', text.lower())
+
+    for term in terms:
+
+        if term not in inverted_index:
+            inverted_index[term] = []
+
+        # Avoid duplicate document IDs
+        if doc_id not in inverted_index[term]:
+            inverted_index[term].append(doc_id)
+
+
+# ============================================================
+# 2. B-TREE IMPLEMENTATION
+# ============================================================
+
+class BTreeNode:
+
+    def __init__(self, leaf=False):
+        self.leaf = leaf
+        self.keys = []
+        self.children = []
+
+
+class BTree:
+
+    def __init__(self, minimum_degree=2):
+        self.t = minimum_degree
+        self.root = BTreeNode(leaf=True)
+
+
+    # --------------------------------------------------------
+    # Search for a key
+    # --------------------------------------------------------
+
+    def search(self, key, node=None):
+
+        if node is None:
+            node = self.root
+
+        i = 0
+
+        while i < len(node.keys) and key > node.keys[i]:
+            i += 1
+
+        if i < len(node.keys) and key == node.keys[i]:
+            return node
+
+        if node.leaf:
+            return None
+
+        return self.search(key, node.children[i])
+
+
+    # --------------------------------------------------------
+    # Insert a new key
+    # --------------------------------------------------------
+
+    def insert(self, key):
+
+        # Don't insert duplicates
+        if self.search(key) is not None:
+            return
+
+        root = self.root
+
+        # If root is full, split it
+        if len(root.keys) == 2 * self.t - 1:
+
+            new_root = BTreeNode(leaf=False)
+            new_root.children.append(root)
+
+            self.root = new_root
+
+            self.split_child(new_root, 0)
+
+            self.insert_non_full(new_root, key)
+
+        else:
+            self.insert_non_full(root, key)
+
+
+    # --------------------------------------------------------
+    # Split a full child
+    # --------------------------------------------------------
+
+    def split_child(self, parent, index):
+
+        t = self.t
+
+        full_child = parent.children[index]
+
+        new_child = BTreeNode(leaf=full_child.leaf)
+
+        # Middle key moves to parent
+        middle_key = full_child.keys[t - 1]
+
+        # Keys after middle go to new child
+        new_child.keys = full_child.keys[t:]
+
+        # Keys before middle stay in old child
+        full_child.keys = full_child.keys[:t - 1]
+
+        # If not leaf, split children too
+        if not full_child.leaf:
+
+            new_child.children = full_child.children[t:]
+
+            full_child.children = full_child.children[:t]
+
+        parent.children.insert(index + 1, new_child)
+
+        parent.keys.insert(index, middle_key)
+
+
+    # --------------------------------------------------------
+    # Insert into a node that is not full
+    # --------------------------------------------------------
+
+    def insert_non_full(self, node, key):
+
+        i = len(node.keys) - 1
+
+        # If leaf, insert directly
+        if node.leaf:
+
+            node.keys.append(None)
+
+            while i >= 0 and key < node.keys[i]:
+                node.keys[i + 1] = node.keys[i]
+                i -= 1
+
+            node.keys[i + 1] = key
+
+        else:
+
+            # Find correct child
+            while i >= 0 and key < node.keys[i]:
+                i -= 1
+
+            i += 1
+
+            # If child is full, split it
+            if len(node.children[i].keys) == 2 * self.t - 1:
+
+                self.split_child(node, i)
+
+                if key > node.keys[i]:
+                    i += 1
+
+            self.insert_non_full(node.children[i], key)
+
+
+    # --------------------------------------------------------
+    # In-order traversal
+    # Returns all terms in sorted order
+    # --------------------------------------------------------
+
+    def inorder(self, node=None, result=None):
+
+        if result is None:
+            result = []
+
+        if node is None:
+            node = self.root
+
+        if node.leaf:
+
+            result.extend(node.keys)
+
+        else:
+
+            for i, key in enumerate(node.keys):
+
+                self.inorder(node.children[i], result)
+
+                result.append(key)
+
+            self.inorder(node.children[-1], result)
+
+        return result
+
+
+# ============================================================
+# 3. BUILD B-TREE TERM DICTIONARY
+# ============================================================
+
+btree = BTree()
+
+for term in inverted_index:
+    btree.insert(term)
+
+
+# Get sorted dictionary from B-tree
+term_dictionary = btree.inorder()
+
+
+print("\n==============================")
+print("TERM DICTIONARY")
+print("==============================")
+
+for term in term_dictionary:
+    print(term)
+
+
+# ============================================================
+# 4. PREFIX SEARCH
+#    Example: comp*
+# ============================================================
+
+def prefix_search(prefix):
+
+    prefix = prefix.lower()
+
+    # Find first possible position
+    start = bisect_left(term_dictionary, prefix)
+
+    matching_terms = []
+
+    for i in range(start, len(term_dictionary)):
+
+        term = term_dictionary[i]
+
+        if term.startswith(prefix):
+            matching_terms.append(term)
+
+        else:
+            # Since dictionary is sorted,
+            # no later term can start with prefix
+            break
+
+    return matching_terms
+
+
+# ============================================================
+# 5. SUFFIX SEARCH
+#    Example: *ing
+# ============================================================
+
+def suffix_search(suffix):
+
+    suffix = suffix.lower()
+
+    matching_terms = []
+
+    for term in term_dictionary:
+
+        if term.endswith(suffix):
+            matching_terms.append(term)
+
+    return matching_terms
+
+
+# ============================================================
+# 6. BUILD PERMUTERM INDEX
+# ============================================================
+
+permuterm_index = {}
+
+for term in term_dictionary:
+
+    # Add end-of-word symbol
+    word = term + "$"
+
+    # Generate every rotation
+    for i in range(len(word)):
+
+        rotation = word[i:] + word[:i]
+
+        if rotation not in permuterm_index:
+            permuterm_index[rotation] = []
+
+        permuterm_index[rotation].append(term)
+
+
+# ============================================================
+# 7. PERMUTERM SEARCH
+#    Example: comp*er
+# ============================================================
+
+def permuterm_search(query):
+
+    query = query.lower()
+
+    # Only one wildcard is supported
+    if query.count("*") != 1:
+        raise ValueError("Query must contain exactly one *")
+
+    # Middle wildcard only
+    if query.startswith("*") or query.endswith("*"):
+        raise ValueError(
+            "Permuterm search here is for a wildcard in the middle"
+        )
+
+    # Split query around *
+    left, right = query.split("*")
+
+    # Example:
+    # comp*er
+    #
+    # left  = comp
+    # right = er
+    #
+    # transformed = er$comp
+
+    transformed = right + "$" + left
+
+    matching_terms = set()
+
+    # Search rotations
+    for rotation, terms in permuterm_index.items():
+
+        if rotation.startswith(transformed):
+
+            matching_terms.update(terms)
+
+    return transformed, sorted(matching_terms)
+
+
+# ============================================================
+# 8. GET DOCUMENT IDs FOR MATCHING TERMS
+# ============================================================
+
+def get_documents(matching_terms):
+
+    result = set()
+
+    for term in matching_terms:
+
+        result.update(inverted_index[term])
+
+    return sorted(result)
+
+
+# ============================================================
+# 9. TEST PREFIX QUERY
+# ============================================================
+
+print("\n==============================")
+print("PREFIX SEARCH")
+print("==============================")
+
+query = "comp*"
+
+prefix = query[:-1]
+
+matching_terms = prefix_search(prefix)
+
+print("Query:", query)
+print("Matching terms:", matching_terms)
+print("Document IDs:", get_documents(matching_terms))
+
+
+# ============================================================
+# 10. TEST SUFFIX QUERY
+# ============================================================
+
+print("\n==============================")
+print("SUFFIX SEARCH")
+print("==============================")
+
+query = "*ing"
+
+suffix = query[1:]
+
+matching_terms = suffix_search(suffix)
+
+print("Query:", query)
+print("Matching terms:", matching_terms)
+print("Document IDs:", get_documents(matching_terms))
+
+
+# ============================================================
+# 11. TEST MIDDLE WILDCARD
+# ============================================================
+
+print("\n==============================")
+print("PERMUTERM SEARCH")
+print("==============================")
+
+query = "comp*er"
+
+transformed, matching_terms = permuterm_search(query)
+
+print("Query:", query)
+print("Transformed query:", transformed)
+print("Matching terms:", matching_terms)
+print("Document IDs:", get_documents(matching_terms))
